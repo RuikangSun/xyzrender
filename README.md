@@ -37,7 +37,7 @@ Most molecular visualisation tools require manual setup: loading files into a GU
 - **Convex hull, hull faces & pores** — semi-transparent facets over selected atoms or rings, exposed faces of molecular cages, and pore rendering
 - **GIF animations** — rotation, TS vibration, trajectory, diffuse/assembly, and depth-of-field animations
 - **Input formats** — XYZ, mol/SDF, MOL2, PDB, SMILES, CIF, SHELXL, cube files, and QM input/output from Gaussian, ORCA, NWChem, Q-Chem, Psi4, MOPAC, GAMESS, Turbomole, CP2K, VASP, Quantum ESPRESSO, SIESTA, and ABINIT
-- **Crystal / periodic structures** — unit cell box, ghost atoms, supercells, and crystallographic axis arrows; auto-detected from VASP POSCAR, QE pw.in, SIESTA FDF, ABINIT, CP2K, SHELXL `.res`/`.ins`, CIF, and extXYZ `Lattice=` headers
+- **Crystal / periodic structures** — unit cell box, ghost atoms, supercells, crystallographic axis arrows, and ORTEP-style thermal ellipsoids from CIF anisotropic displacement parameters; auto-detected from VASP POSCAR, QE pw.in, SIESTA FDF, ABINIT, CP2K, SHELXL `.res`/`.ins`, CIF, and extXYZ `Lattice=` headers
 - **Multiple output formats** — vector SVG (default), PNG, PDF, and GIF — all from the same command
 
 **Preconfigured but extensible.** Built-in presets (`default`, `flat`, `paton`, `pmol`, `skeletal`, `bubble`, `vdw`, `tube`, `mtube`, `btube`, `wire`, `graph`) cover common use cases. Every setting — colors, radii, bond widths, gradients, fog — can be overridden via CLI flags or a custom JSON config file.

@@ -138,6 +138,10 @@ xyzrender "$DIR/NV63_cell.xyz" --axis 001 -o "$IMG/NV63_001.svg"   # looking dow
 xyzrender "$DIR/NV63_cell.xyz" --axis 111 --gif-rot 111 -o "$IMG/NV63_111.svg" -go "$IMG/NV63_111.gif"  # look down [111], rotate around [111]
 xyzrender "$DIR/roy.res" --axis 100 --unwrap -o "$IMG/roy_shelxl.svg"  # SHELXL .res (view down short a-axis; requires [shelxl])
 
+echo "=== Thermal ellipsoids (ORTEP) ==="
+xyzrender "$DIR/thermal_ellipsoid.cif" --thermal -o "$IMG/thermal_ellipsoid.svg"
+xyzrender "$DIR/thermal_ellipsoid.cif" --thermal --thermal-prob 90 -o "$IMG/thermal_ellipsoid_90.svg"
+
 echo "=== Highlight ==="
 xyzrender "$DIR/caffeine.xyz" --hl "1-3,7" -o "$IMG/caffeine_hl.svg" --gif-rot -go "$IMG/caffeine_hl.gif"
 xyzrender "$DIR/caffeine.xyz" --hl "1-3,7" lightseagreen -o "$IMG/caffeine_hl_custom.svg"

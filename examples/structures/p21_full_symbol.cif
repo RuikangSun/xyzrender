@@ -1,0 +1,17 @@
+data_p21_full_symbol
+_chemical_name_common            'Full Hermann-Mauguin symbol test'
+_cell_length_a                   10.0
+_cell_length_b                   11.0
+_cell_length_c                   12.0
+_cell_angle_alpha                90.0
+_cell_angle_beta                 100.0
+_cell_angle_gamma                90.0
+_symmetry_cell_setting           monoclinic
+_symmetry_space_group_name_H-M   'P 1 21 1'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+C1 C 0.10 0.20 0.30

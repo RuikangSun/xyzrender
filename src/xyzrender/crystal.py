@@ -44,6 +44,16 @@ logger = logging.getLogger(__name__)
 __all__ = ["add_crystal_images", "build_supercell", "load_crystal", "unwrap_molecules"]
 
 
+def _adp_attr(graph: "nx.Graph", node_id: int) -> dict:
+    """Return the ``adp`` node attribute for a ghost atom, if present.
+
+    Periodic images must carry the same anisotropic displacement tensor as
+    their source atom so thermal ellipsoids continue across the cell boundary.
+    """
+    adp = graph.nodes[node_id].get("adp")
+    return {"adp": adp} if adp is not None else {}
+
+
 def _build_threshold_matrix(syms: list[str]) -> np.ndarray:
     """Return an (n, n) matrix of bond-distance cutoffs for a list of element symbols.
 
@@ -629,6 +639,7 @@ def _add_crystal_images_generic(graph: nx.Graph, crystal_data: CellData) -> int:
                 position=(float(img_pos[0]), float(img_pos[1]), float(img_pos[2])),
                 image=True,
                 source=src_id,
+                **_adp_attr(graph, src_id),
             )
             for j in targets:
                 graph.add_edge(img_id, cell_ids[j], bond_order=1.0, image_bond=True)
@@ -749,6 +760,7 @@ def _add_crystal_images_supercell(
                 position=(float(img_pos[0]), float(img_pos[1]), float(img_pos[2])),
                 image=True,
                 source=cell_ids[src_idx],
+                **_adp_attr(graph, cell_ids[src_idx]),
             )
             for tgt_idx in targets:
                 graph.add_edge(img_id, cell_ids[tgt_idx], bond_order=1.0, image_bond=True)

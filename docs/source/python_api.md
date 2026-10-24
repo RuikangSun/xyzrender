@@ -252,6 +252,13 @@ render(mol, supercell=(2, 2, 1))         # 2×2×1 supercell with ghost atoms
 
 `unwrap=True` moves atoms by integer lattice translations so each molecule is drawn whole, anchoring every molecule at the image where most of its atoms already sat (it is **not** a centre-of-mass wrap). Ghost (periodic-image) atoms default off when `unwrap` is on, since molecules are already contiguous. Fully-connected frameworks (ionic or covalent networks) have no discrete molecules to reassemble and are left unchanged, with a warning. This is the primary entry point — the CLI `--unwrap` flag simply forwards here. The underlying transform is also exposed as [`xyzrender.crystal.unwrap_molecules(graph, cell_data)`](#) if you want to apply it to a graph directly.
 
+CIF inputs with anisotropic displacement parameters can be rendered as ORTEP-style thermal ellipsoids with `thermal=True`. `thermal_prob` sets the enclosed probability (default 50 %) and `thermal_scale` applies an extra multiplier; atoms without ADP data keep their normal spheres. Thermal mode shows all H by default — pass `no_hy=True` to hide C–H — and ghost atoms default off when thermal ellipsoids are active:
+
+```python
+mol = load("structure.cif")
+render(mol, thermal=True, thermal_prob=50, output="thermal.svg")
+```
+
 ## Reusing a style config
 
 For a single render, pass `config=` to `render()` directly — `render(mol, config="paton")` and `render(mol, config="./my_style.json")` both work without any helper. Use `build_config()` only when you want to build the styling **once** and reuse it across many renders:

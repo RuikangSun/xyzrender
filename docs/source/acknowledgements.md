@@ -13,6 +13,8 @@ The interlocked-spheres rendering used by `--config vdw` and the `--vdw` overlay
 
 NCI surface example structures from [NCIPlot](https://github.com/juliacontrerasgarcia/NCIPLOT-4.2/tree/master/tests).
 
+The thermal-ellipsoid rendering follows the probability convention established by [ORTEP-III](https://ornl-ndav.github.io/ortep/) (Burnett & Johnson, Oak Ridge National Laboratory): ellipsoid radii are scaled by `sqrt(chi2_3(p))`, which is 1.54 at 50 % probability. ORTEP-III is distributed as public-domain code; xyzrender's implementation is independent and does not include ORTEP source code. ORTEP-3 for Windows is a separately licensed program and is not used.
+
 ## Key dependencies
 
 - [**xyzgraph**](https://github.com/aligfellow/xyzgraph) — bond connectivity, bond orders, aromaticity detection and non-covalent interactions from molecular geometry

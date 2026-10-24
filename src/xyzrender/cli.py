@@ -144,6 +144,7 @@ Crystal:
   --axes / --no-axes      Crystallographic axis arrows
   --axis HKL              Orient along Miller index (e.g. 111)
   --supercell M N L       Repeat unit cell
+  --thermal               Thermal ellipsoids from CIF ADPs (--thermal-prob P)
 
 Run 'xyzrender --help' for full details on every option.
 """
@@ -941,6 +942,29 @@ def main() -> None:
             "Ghost atoms are disabled. Fully-connected frameworks are left unchanged."
         ),
     )
+    crystal_g.add_argument(
+        "--thermal",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Draw ORTEP-style thermal ellipsoids from CIF anisotropic displacement parameters. "
+            "All H are shown by default; use --no-hy to hide C-H. Atoms without ADP data keep their normal spheres."
+        ),
+    )
+    crystal_g.add_argument(
+        "--thermal-prob",
+        type=float,
+        default=None,
+        metavar="PERCENT",
+        help="Probability enclosed by each thermal ellipsoid (default: 50)",
+    )
+    crystal_g.add_argument(
+        "--thermal-scale",
+        type=float,
+        default=None,
+        metavar="FACTOR",
+        help="Extra scale factor applied to thermal ellipsoid radii (default: 1.0)",
+    )
 
     args = p.parse_args()
 
@@ -1119,6 +1143,15 @@ def main() -> None:
     _supercell = tuple(args.supercell) if args.supercell is not None else (1, 1, 1)
     if any(v < 1 for v in _supercell):
         p.error(f"--supercell values must be >= 1 (got {_supercell})")
+
+    # --thermal-prob / --thermal-scale imply --thermal unless --no-thermal was given.
+    _thermal = args.thermal
+    if _thermal is None and (args.thermal_prob is not None or args.thermal_scale is not None):
+        _thermal = True
+    if args.thermal_prob is not None and not 0.0 < args.thermal_prob < 100.0:
+        p.error(f"--thermal-prob must be between 0 and 100 (got {args.thermal_prob})")
+    if args.thermal_scale is not None and args.thermal_scale <= 0.0:
+        p.error(f"--thermal-scale must be positive (got {args.thermal_scale})")
 
     if wants_gif:
         gif_path = args.gif_output or f"{base}.gif"
@@ -1351,8 +1384,12 @@ def main() -> None:
             reference_mol=mol,
         )
     # --- Crystal ghost resolution ---
-    # Ghosts default: on whenever the molecule carries cell_data (auto-detected or explicit)
-    _show_ghosts = args.ghosts if args.ghosts is not None else mol.cell_data is not None
+    # Ghosts default: on whenever the molecule carries cell_data (auto-detected or explicit).
+    # Thermal ellipsoid plots default to no ghosts unless --ghosts is given; pass
+    # None through so render() can apply that default.
+    _show_ghosts = args.ghosts
+    if _show_ghosts is None and not _thermal:
+        _show_ghosts = mol.cell_data is not None
 
     # Validate supercell usage: allowed for any input that has a valid lattice.
     if _supercell != (1, 1, 1):
@@ -1431,6 +1468,11 @@ def main() -> None:
             cell_width=args.cell_width,
             ghost_opacity=args.ghost_opacity,
             unwrap=args.unwrap,
+            thermal=_thermal,
+            thermal_prob=args.thermal_prob,
+            thermal_scale=args.thermal_scale,
+            hy=hy_spec,
+            no_hy=args.no_hy,
             mo=args.mo,
             dens=args.dens,
             esp=args.esp,
@@ -1550,6 +1592,11 @@ def main() -> None:
                 cell_width=args.cell_width,
                 ghost_opacity=args.ghost_opacity,
                 unwrap=args.unwrap,
+                thermal=_thermal,
+                thermal_prob=args.thermal_prob,
+                thermal_scale=args.thermal_scale,
+                hy=hy_spec,
+                no_hy=args.no_hy,
                 vector=args.vector,
                 vector_scale=args.vector_scale,
                 glow=args.glow,

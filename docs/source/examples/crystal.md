@@ -108,6 +108,32 @@ xyzrender NV63_cell.xyz --axis 111 -o NV63_111.svg
 xyzrender NV63_cell.xyz --axis 111 --gif-rot 111 -o NV63_111.svg -go NV63_111.gif
 ```
 
+## Thermal ellipsoids (ORTEP)
+
+CIF files that carry anisotropic displacement parameters can be drawn as ORTEP-style thermal ellipsoids. `--thermal` reads `_atom_site_aniso_U_ij` for anisotropic sites and falls back to `_atom_site_U_iso_or_equiv` (or `_atom_site_B_iso_or_equiv`) for isotropic sites. Atoms with no ADP data keep their normal spheres. Thermal ellipsoid plots **show all hydrogen atoms by default**; pass `--no-hy` to hide C–H hydrogens.
+
+```bash
+xyzrender structure.cif --thermal -o thermal.svg              # all H shown
+xyzrender structure.cif --thermal --no-hy -o thermal_no_h.svg # hide C–H
+xyzrender structure.cif --thermal --thermal-prob 90 -o thermal_90.svg
+xyzrender structure.cif --thermal --no-hy --no-ghosts --unwrap -o thermal_molecule.svg
+```
+
+The default 50 % probability corresponds to ORTEP's `SCAL2` primer constant of 1.54. `--thermal-prob` selects a different enclosed probability, and `--thermal-scale` applies an extra multiplier to the radii. Thermal ellipsoids follow `--axis` and `--gif-rot`, and work with `--supercell` and periodic ghost atoms.
+
+From Python, these are the `thermal`, `thermal_prob`, and `thermal_scale` kwargs:
+
+```python
+from xyzrender import load, render
+
+mol = load("structure.cif")
+render(mol, thermal=True, thermal_prob=50, output="thermal.svg")
+```
+
+```{note}
+Ghost atoms are hidden by default when thermal ellipsoids are drawn, since a thermal-ellipsoid plot normally shows the cell contents rather than their periodic images. Pass `--ghosts` to show them. Hydrogens are shown by default in thermal mode; use `--no-hy` to hide C–H.
+```
+
 ## Crystal flags
 
 | Flag | Description |
@@ -122,3 +148,6 @@ xyzrender NV63_cell.xyz --axis 111 --gif-rot 111 -o NV63_111.svg -go NV63_111.gi
 | `--axis HKL` | Orient looking down a crystallographic direction (e.g. `111`, `001`) |
 | `--supercell M N L` | Repeat the unit cell `M×N×L` times along a/b/c (requires lattice/unit-cell data; default: `1 1 1`) |
 | `--unwrap` | Reassemble molecules split across periodic boundaries so each is drawn whole (disables ghost atoms; frameworks left unchanged) |
+| `--thermal` / `--no-thermal` | Draw ORTEP-style thermal ellipsoids from CIF anisotropic displacement parameters (default: off). All H are shown by default; `--no-hy` hides C–H |
+| `--thermal-prob PERCENT` | Probability enclosed by each thermal ellipsoid (default: 50) |
+| `--thermal-scale FACTOR` | Extra multiplier on thermal ellipsoid radii (default: 1.0) |

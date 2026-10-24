@@ -178,6 +178,37 @@ def render_svg(graph, config: RenderConfig | None = None, *, _log: bool = True, 
             _rotated = [_pca_rot @ (np.array(c) - _pca_centroid) for c in cfg.pore_centroids]
             cfg.pore_centroids = [(float(r[0]), float(r[1]), float(r[2])) for r in _rotated]
 
+    # --- Thermal ellipsoids (ORTEP-style) ---
+    # ADPs live on graph nodes in the CIF crystallographic basis.  Convert to
+    # Cartesian with the *current* lattice so the ellipsoids follow any
+    # crystal rotation (--axis, GIF frames).  Only atoms carrying an ``adp``
+    # node attribute are drawn as ellipsoids; the rest keep their spheres.
+    _thermal_k = 0.0
+    _thermal_u = np.full((n, 3, 3), np.nan)
+    _thermal_mask = np.zeros(n, dtype=bool)
+    if cfg.thermal:
+        if cfg.cell_data is None:
+            logger.warning("thermal ellipsoids require a periodic structure with lattice data")
+        else:
+            from xyzrender.thermal import probability_scale
+
+            if cfg.thermal_scale <= 0.0:
+                msg = f"thermal_scale must be positive (got {cfg.thermal_scale})"
+                raise ValueError(msg)
+            _thermal_k = probability_scale(cfg.thermal_prob) * cfg.thermal_scale
+            _lat = np.asarray(cfg.cell_data.lattice, dtype=float)
+            for ai, nid in enumerate(node_ids):
+                adp = graph.nodes[nid].get("adp")
+                if adp is None:
+                    continue
+                _thermal_u[ai] = _lat.T @ np.asarray(adp, dtype=float) @ _lat
+            _thermal_mask = np.isfinite(_thermal_u).all(axis=(1, 2))
+            if _thermal_mask.any():
+                logger.debug("Thermal ellipsoids: %d/%d atoms with ADP", int(_thermal_mask.sum()), n)
+            else:
+                logger.warning("thermal ellipsoids requested but no ADP data found for this structure")
+    _thermal_active = bool(cfg.thermal and _thermal_mask.any())
+
     raw_vdw = np.array(
         [_CENTROID_VDW if s == "*" else DATA.vdw.get(s, 1.5) * (cfg.h_scale if s == "H" else 1.0) for s in symbols]
     )
@@ -223,6 +254,14 @@ def render_svg(graph, config: RenderConfig | None = None, *, _log: bool = True, 
         fit_radii = np.array([raw_vdw_sphere[i] * cfg.vdw_scale if i in vdw_active else radii[i] for i in range(n)])
     else:
         fit_radii = radii
+
+    # Thermal ellipsoids fit the canvas by their largest principal semi-axis.
+    if _thermal_active:
+        _thermal_semi = np.zeros(n)
+        _thermal_semi[_thermal_mask] = _thermal_k * np.sqrt(
+            np.clip(np.linalg.eigvalsh(_thermal_u[_thermal_mask]).max(axis=1), 0.0, None)
+        )
+        fit_radii = np.where(_thermal_mask, _thermal_semi, fit_radii)
 
     ref_scale = (_REF_CANVAS - 2 * cfg.padding) / _REF_SPAN
     # Pad fit_radii by atom stroke overshoot so the bounding box accounts for it
@@ -283,6 +322,15 @@ def render_svg(graph, config: RenderConfig | None = None, *, _log: bool = True, 
             extra_lo = np.minimum(extra_lo, lo) if extra_lo is not None else lo
             extra_hi = np.maximum(extra_hi, hi) if extra_hi is not None else hi
     scale, cx, cy, canvas_w, canvas_h = _fit_canvas(pos, fit_radii, cfg, extra_lo=extra_lo, extra_hi=extra_hi)
+
+    # Projected silhouette of each thermal ellipsoid, in screen pixels.
+    _thermal_ellipses: list[tuple[float, float, float] | None] = [None] * n
+    if _thermal_active:
+        from xyzrender.thermal import ellipse_from_adp
+
+        for ai in np.flatnonzero(_thermal_mask):
+            rx, ry, angle = ellipse_from_adp(_thermal_u[ai], _thermal_k, scale)
+            _thermal_ellipses[ai] = (max(rx, 0.5), max(ry, 0.5), angle)
 
     # scale_ratio: encodes both molecule complexity AND canvas size so that
     # bond/label widths defined at _REF_CANVAS grow proportionally on larger canvases.
@@ -1448,6 +1496,21 @@ def render_svg(graph, config: RenderConfig | None = None, *, _log: bool = True, 
             _d[_valid] = _rij[_valid] / _dist[_valid, None]
             _ri = radii[_bi]
             _rj = radii[_bj]
+            if _thermal_active:
+                # Trim each bond at the ellipsoid surface along its own
+                # direction rather than at the display-sphere radius.
+                _ri = _ri.copy()
+                _rj = _rj.copy()
+                _mi = _thermal_mask[_bi]
+                _mj = _thermal_mask[_bj]
+                if _mi.any():
+                    _ui = _thermal_u[_bi[_mi]]
+                    _di = _d[_mi]
+                    _ri[_mi] = _thermal_k * np.sqrt(np.clip(np.einsum("ni,nij,nj->n", _di, _ui, _di), 0.0, None))
+                if _mj.any():
+                    _uj = _thermal_u[_bj[_mj]]
+                    _dj = _d[_mj]
+                    _rj[_mj] = _thermal_k * np.sqrt(np.clip(np.einsum("ni,nij,nj->n", _dj, _uj, _dj), 0.0, None))
             _start = pos[_bi] + _d * (_ri * 0.9)[:, None]
             _end = pos[_bj] - _d * (_rj * 0.9)[:, None]
             _dot_check = ((_end - _start) * _d).sum(axis=1)
@@ -1623,7 +1686,12 @@ def render_svg(graph, config: RenderConfig | None = None, *, _log: bool = True, 
             _stroke_atom = _color_hex[ai] if _stroke_src == "atom" else _stroke_src
             dof_attr = f' filter="url(#dof{dof_buckets[ai]})"' if cfg.dof else ""
             _poly_xy = _atom_polys[ai] if _atom_polys is not None else None
-            _r_px = radii[ai] * scale
+            _thermal_ellipse = _thermal_ellipses[ai] if _thermal_active else None
+            if _thermal_ellipse is not None:
+                _poly_xy = None
+                _r_px = max(_thermal_ellipse[0], _thermal_ellipse[1])
+            else:
+                _r_px = radii[ai] * scale
             # Atoms with only TS/NCI edges (or none) lose position info at
             # atom_scale=0 — bump to a dot 20% wider than the bond, matching
             # the bond outline and (if cylinders are shaded) cylinder gradient.
@@ -1635,6 +1703,7 @@ def render_svg(graph, config: RenderConfig | None = None, *, _log: bool = True, 
                 and symbols[ai] != "*"
                 and ai not in _has_solid_bond
                 and _poly_xy is None
+                and _thermal_ellipse is None
             ):
                 _r_px = _dot_r
                 if _sw_ai < cfg.bond_outline_width * scale_ratio:
@@ -1642,7 +1711,13 @@ def render_svg(graph, config: RenderConfig | None = None, *, _log: bool = True, 
                     _stroke_atom = cfg.bond_outline_color
                 if cfg.bond_gradient:
                     _grad_ai = True
-            if _poly_xy is not None:
+            if _thermal_ellipse is not None:
+                _rx, _ry, _angle = _thermal_ellipse
+                _shape_geom = (
+                    f'<ellipse cx="{xi:.1f}" cy="{yi:.1f}" rx="{_rx:.1f}" ry="{_ry:.1f}" '
+                    f'transform="rotate({_angle:.1f} {xi:.1f} {yi:.1f})"'
+                )
+            elif _poly_xy is not None:
                 _pxs = canvas_w / 2 + scale * (_poly_xy[:, 0] - cx)
                 _pys = canvas_h / 2 - scale * (_poly_xy[:, 1] - cy)
                 _pts_str = " ".join(f"{x:.1f},{y:.1f}" for x, y in zip(_pxs, _pys, strict=True))
@@ -1654,10 +1729,7 @@ def render_svg(graph, config: RenderConfig | None = None, *, _log: bool = True, 
                 _glow_fill = colors[ai].blend(WHITE, acfg.atom_wash).hex if acfg.atom_wash > 0 else _color_hex[ai]
                 if cfg.fog:
                     _glow_fill = blend_fog(_glow_fill, fog_col, fog_f[ai])
-                svg.append(
-                    f'  <circle cx="{xi:.1f}" cy="{yi:.1f}" r="{_r_px:.1f}" '
-                    f'fill="{_glow_fill}" filter="url(#glow)"{op_attr_atom}/>'
-                )
+                svg.append(f'  {_shape_geom} fill="{_glow_fill}" filter="url(#glow)"{op_attr_atom}/>')
             if _grad_ai:
                 # Inline gradient def when no shared def exists for this atom:
                 # interlock polygons (anchored at sphere centre, not the

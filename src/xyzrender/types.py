@@ -380,6 +380,10 @@ class RenderConfig:
     cell_color: str = "#333333"
     cell_line_width: float = 2.0
     periodic_image_opacity: float = 0.5
+    # Thermal ellipsoids (ORTEP-style) from CIF anisotropic displacement data.
+    thermal: bool = False
+    thermal_prob: float = 50.0  # probability enclosed by each ellipsoid (%)
+    thermal_scale: float = 1.0  # extra multiplier on the ellipsoid radii
     axis_colors: tuple[str, str, str] = (
         "firebrick",
         "forestgreen",

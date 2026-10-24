@@ -855,6 +855,9 @@ def render(
     cell_width: float | None = None,
     ghost_opacity: float | None = None,
     unwrap: bool = False,
+    thermal: bool | None = None,
+    thermal_prob: float | None = None,
+    thermal_scale: float | None = None,
     # --- Rendering overlays (1-indexed atom numbering) ---
     ts_bonds: list[tuple[int, int]] | None = None,
     nci_bonds: list[tuple[int, int]] | None = None,
@@ -1078,6 +1081,20 @@ def render(
         Fully-connected frameworks are left unchanged.  This is the primary,
         supported entry point for unwrapping — the CLI ``--unwrap`` flag simply
         forwards here.
+    thermal:
+        Draw ORTEP-style thermal ellipsoids for atoms carrying anisotropic
+        displacement parameters.  CIF inputs supply these automatically from
+        ``_atom_site_aniso_*`` (or ``_atom_site_U_iso_or_equiv`` for isotropic
+        sites); other formats have no ADP data, so the flag is ignored with a
+        warning.  Requires a periodic structure with lattice data.  All H are
+        shown by default in thermal mode (pass ``no_hy=True`` to hide C-H), and
+        ghost atoms default off (pass ``ghosts=True`` to show them).
+    thermal_prob:
+        Probability enclosed by each ellipsoid, in percent (default 50, the
+        ORTEP convention).  Internally scaled by ``sqrt(chi2_3(p))``.
+    thermal_scale:
+        Extra multiplier on the ellipsoid radii (default 1.0).  Use it for
+        custom scaling such as the ORTEP ``SCAL2`` factor.
 
     Returns
     -------
@@ -1313,6 +1330,22 @@ def render(
         axes=_show_axes,
     )
 
+    # --- Thermal ellipsoids (before cell config: thermal defaults ghosts off) ---
+    _apply_thermal_config(
+        cfg,
+        thermal=thermal,
+        thermal_prob=thermal_prob,
+        thermal_scale=thermal_scale,
+        has_lattice=rmol.cell_data is not None,
+    )
+    _thermal_has_adp = cfg.thermal and any(
+        rmol.graph.nodes[node_id].get("adp") is not None for node_id in rmol.graph.nodes()
+    )
+    if _thermal_has_adp and hy is None:
+        # Thermal ellipsoid plots show all H by default; --no-hy hides C-H.
+        cfg.hide_h = no_hy
+        cfg.show_h_indices = []
+
     # --- Cell / crystal config ---
     if rmol.cell_data is not None:
         _apply_cell_config(
@@ -1321,7 +1354,7 @@ def render(
             no_cell=no_cell,
             axis=axis,
             supercell=supercell,
-            ghosts=ghosts,
+            ghosts=False if _thermal_has_adp and ghosts is None else ghosts,
             cell_color=cell_color,
             cell_width=cell_width,
             ghost_opacity=ghost_opacity,
@@ -1576,6 +1609,9 @@ def render_gif(
     cell_width: float | None = None,
     ghost_opacity: float | None = None,
     unwrap: bool = False,
+    thermal: bool | None = None,
+    thermal_prob: float | None = None,
+    thermal_scale: float | None = None,
 ) -> GIFResult:
     """Render a molecule to an animated GIF and return a :class:`GIFResult`.
 
@@ -1616,6 +1652,10 @@ def render_gif(
         Reference frame index for TS detection (0-indexed).
     config:
         Preset name, JSON path, or pre-built :class:`~xyzrender.types.RenderConfig`.
+    thermal:
+        Draw ORTEP-style thermal ellipsoids from CIF anisotropic displacement
+        parameters in rotation GIFs.  ``thermal_prob`` and ``thermal_scale``
+        have the same meaning as in :func:`render`; all H are shown by default.
 
     Returns
     -------
@@ -1761,6 +1801,21 @@ def render_gif(
 
     if haptic:
         cfg.haptic = True
+
+    _apply_thermal_config(
+        cfg,
+        thermal=thermal,
+        thermal_prob=thermal_prob,
+        thermal_scale=thermal_scale,
+        has_lattice=_gif_mol.cell_data is not None,
+    )
+    _thermal_has_adp = cfg.thermal and any(
+        _gif_graph.nodes[node_id].get("adp") is not None for node_id in _gif_graph.nodes()
+    )
+    if _thermal_has_adp and hy is None:
+        # Thermal ellipsoid plots show all H by default; --no-hy hides C-H.
+        cfg.hide_h = no_hy
+        cfg.show_h_indices = []
 
     _apply_render_overlays(cfg, _gif_graph, ts_bonds=ts_bonds)
 
@@ -2012,7 +2067,7 @@ def render_gif(
                 no_cell=no_cell,
                 axis=axis,
                 supercell=supercell,
-                ghosts=ghosts,
+                ghosts=False if _thermal_has_adp and ghosts is None else ghosts,
                 cell_color=cell_color,
                 cell_width=cell_width,
                 ghost_opacity=ghost_opacity,
@@ -3116,6 +3171,37 @@ def _validate_and_compute_surfaces(
     if nci_params is not None and nci is not None and cube_data is not None:
         nci_cube = parse_cube(str(nci))
         compute_nci_surface(rmol, cube_data, nci_cube, cfg, nci_params, iso_was_explicit=iso_was_explicit)
+
+
+def _apply_thermal_config(
+    cfg: RenderConfig,
+    *,
+    thermal: bool | None,
+    thermal_prob: float | None,
+    thermal_scale: float | None,
+    has_lattice: bool,
+) -> None:
+    """Apply and validate thermal-ellipsoid render options."""
+    if thermal is not None:
+        cfg.thermal = thermal
+    elif thermal_prob is not None or thermal_scale is not None:
+        # Match the CLI: --thermal-prob / --thermal-scale imply --thermal.
+        cfg.thermal = True
+    if thermal_prob is not None:
+        cfg.thermal_prob = thermal_prob
+    if thermal_scale is not None:
+        cfg.thermal_scale = thermal_scale
+    if not cfg.thermal:
+        return
+    if not 0.0 < cfg.thermal_prob < 100.0:
+        msg = f"thermal_prob must be between 0 and 100 (got {cfg.thermal_prob})"
+        raise ValueError(msg)
+    if cfg.thermal_scale <= 0.0:
+        msg = f"thermal_scale must be positive (got {cfg.thermal_scale})"
+        raise ValueError(msg)
+    if not has_lattice:
+        logger.warning("thermal ellipsoids require a periodic structure with lattice data; ignoring")
+        cfg.thermal = False
 
 
 def _apply_cell_config(

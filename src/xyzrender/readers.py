@@ -297,6 +297,7 @@ def load_molecule(
         graph.graph["lattice"] = data.pbc_cell
         graph.graph["lattice_origin"] = np.zeros(3)
         crystal = CellData(lattice=data.pbc_cell)
+        _stamp_adp(graph, data)
     elif p.endswith((".res", ".ins")):
         data = fmt.parse_shelxl(p)
         # SHELXL is periodic — bond orders are always suppressed at render time
@@ -431,6 +432,7 @@ def graph_from_moldata(
         if multiplicity is not None:
             graph.graph["multiplicity"] = multiplicity
         _stamp_file_colors(graph, data)
+        _stamp_adp(graph, data)
         return graph
 
     # Fall back to xyzgraph distance-based detection
@@ -448,6 +450,7 @@ def graph_from_moldata(
         graph.number_of_edges(),
     )
     _stamp_file_colors(graph, data)
+    _stamp_adp(graph, data)
     return graph
 
 
@@ -463,6 +466,30 @@ def _stamp_file_colors(graph: nx.Graph, data) -> None:
         if i in graph.nodes:
             graph.nodes[i]["file_color"] = hex_color
     logger.debug("Applied %d per-atom colours from file", len(data.colors))
+
+
+def _stamp_adp(graph: nx.Graph, data) -> None:
+    """Copy per-atom ADP tensors from *data* onto graph nodes.
+
+    The tensor is stored in the CIF crystallographic basis (Å²); the renderer
+    converts it to Cartesian using the current lattice.  Atoms without ADP
+    data are left untouched.
+    """
+    adp = getattr(data, "adp", None)
+    if not adp:
+        return
+    node_ids = list(graph.nodes())
+    if len(node_ids) != len(adp):
+        logger.warning(
+            "ADP count (%d) does not match atom count (%d); thermal ellipsoids disabled",
+            len(adp),
+            len(node_ids),
+        )
+        return
+    for node_id, tensor in zip(node_ids, adp, strict=True):
+        if tensor is not None:
+            graph.nodes[node_id]["adp"] = np.asarray(tensor, dtype=float)
+    logger.debug("Applied %d per-atom ADPs from file", sum(tensor is not None for tensor in adp))
 
 
 def load_ts_molecule(

@@ -77,6 +77,11 @@ class MolData:
         ``None`` when the format carries no explicit colouring.
     camera:
         Saved viewer camera, or ``None`` when the file carries none.
+    adp:
+        Per-atom anisotropic displacement tensors, or ``None`` when the file
+        carries no ADP data.  Each entry is a ``(3, 3)`` symmetric tensor in
+        the CIF orthogonalisation convention (Å²); ``None`` entries mark atoms
+        without ADP data.
     """
 
     atoms: list[tuple[str, tuple[float, float, float]]]
@@ -86,6 +91,7 @@ class MolData:
     pbc_cell: np.ndarray | None = field(default=None, repr=False)
     colors: list[str] | None = field(default=None, repr=False)
     camera: CameraData | None = field(default=None, repr=False)
+    adp: list[np.ndarray | None] | None = field(default=None, repr=False)
 
 
 # ---------------------------------------------------------------------------
@@ -989,21 +995,275 @@ def parse_molobject(mol, *, conf_id: int = -1, kekule: bool = False, name: str |
 # CIF  (requires ase)
 # ---------------------------------------------------------------------------
 
+_CIF_SG_NAME_TAGS = (
+    "_symmetry_space_group_name_h-m",
+    "_space_group_name_h-m_alt",
+    "_space_group_name_h-m",
+)
+
+
+def _as_cif_list(value) -> list:
+    """Normalise a CIF tag value to a list (loops are lists, pairs scalars)."""
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
+
+def _cif_float(value) -> float | None:
+    """Return *value* as a finite float, or ``None`` for CIF nulls."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if np.isfinite(number) else None
+
+
+def _cif_spacegroup_candidates(name: str) -> list[str]:
+    """Return ASE-style alternatives for a CIF Hermann-Mauguin symbol.
+
+    CIF files often use the full symbol with explicit identity operations
+    (``P 1 21/c 1``), while ASE's space-group database stores the short form
+    (``P 21/c``).  Those identity tokens are removed in the second candidate.
+    """
+    candidates = [name]
+    tokens = name.replace("_", "").split()
+    if len(tokens) > 3 and tokens[1] == "1" and tokens[2] == "1" and tokens[3] != "1":
+        # e.g. P 1 1 21 (unique axis c): dropping the identity tokens would
+        # silently select the unique-axis-b setting, so leave it to ASE.
+        return candidates
+    if len(tokens) > 1:
+        short = [tokens[0], *(token for token in tokens[1:] if token != "1")]
+        if len(short) > 1:
+            candidates.append(" ".join(short))
+    return list(dict.fromkeys(candidates))
+
+
+def _normalise_cif_spacegroup(block):
+    """Return a copy of *block* with an ASE-compatible space-group symbol.
+
+    Returns ``None`` when no candidate is recognised.  Only the symbol tag is
+    rewritten; symmetry operations and all other data are preserved.
+    """
+    from ase.io.cif import CIFBlock
+    from ase.spacegroup.spacegroup import SpacegroupNotFoundError
+
+    name = ""
+    for tag in _CIF_SG_NAME_TAGS:
+        value = block.get(tag)
+        if value:
+            name = str(value)
+            break
+    if not name:
+        return None
+
+    for candidate in _cif_spacegroup_candidates(name)[1:]:
+        tags = {tag: block[tag] for tag in block}
+        for tag in _CIF_SG_NAME_TAGS:
+            if tag in tags:
+                tags[tag] = candidate
+        tags["_symmetry_space_group_name_h-m"] = candidate
+        candidate_block = CIFBlock(block.name, tags)
+        try:
+            candidate_block.get_spacegroup(True)
+        except (SpacegroupNotFoundError, ValueError):
+            continue
+        logger.warning("CIF space-group symbol %r is not in the ASE database; using %r", name, candidate)
+        return candidate_block
+    return None
+
+
+def _cif_symbol_from_label(label: str) -> str:
+    """Extract an element symbol from a CIF atom label."""
+    match = re.search(r"([A-Z][a-z]?)", str(label))
+    return match.group(1) if match else ""
+
+
+def _cif_adp_tensors(block, atoms) -> list[np.ndarray | None] | None:
+    """Return per-atom CIF ADP tensors aligned with *atoms*.
+
+    CIF stores ``Uij`` in Å² in the crystallographic orthogonalisation
+    convention: the structure-factor term contains
+    ``Uij hi hj ai* aj*``.  Multiplying by the reciprocal-axis lengths
+    diagonal gives a tensor in the fractional basis, which is converted to
+    Cartesian with the lattice when rendering.  Keeping that basis makes the
+    tensor rotate with the crystal.
+
+    Symmetry-generated atoms inherit the ADP of their asymmetric-unit site,
+    rotated by the symmetry operation that produced them.
+    """
+    labels = _as_cif_list(block.get("_atom_site_label"))
+    if not labels:
+        return None
+
+    cell = np.asarray(atoms.get_cell(), dtype=float)
+    if cell.shape != (3, 3) or abs(float(np.linalg.det(cell))) < 1e-12:
+        return None
+
+    # Asymmetric-unit fractional coordinates (CIF may alternatively store
+    # cartesian coordinates; convert those back to fractional).
+    fx = _as_cif_list(block.get("_atom_site_fract_x"))
+    fy = _as_cif_list(block.get("_atom_site_fract_y"))
+    fz = _as_cif_list(block.get("_atom_site_fract_z"))
+    if fx and len(fx) == len(fy) == len(fz) == len(labels):
+        asu_frac = np.column_stack(
+            [
+                np.array([_cif_float(v) for v in fx], dtype=float),
+                np.array([_cif_float(v) for v in fy], dtype=float),
+                np.array([_cif_float(v) for v in fz], dtype=float),
+            ]
+        )
+    else:
+        cx = _as_cif_list(block.get("_atom_site_cartn_x"))
+        cy = _as_cif_list(block.get("_atom_site_cartn_y"))
+        cz = _as_cif_list(block.get("_atom_site_cartn_z"))
+        if not (cx and len(cx) == len(cy) == len(cz) == len(labels)):
+            return None
+        cart = np.column_stack(
+            [
+                np.array([_cif_float(v) for v in cx], dtype=float),
+                np.array([_cif_float(v) for v in cy], dtype=float),
+                np.array([_cif_float(v) for v in cz], dtype=float),
+            ]
+        )
+        asu_frac = cart @ np.linalg.inv(cell)
+    if not np.isfinite(asu_frac).all():
+        return None
+
+    try:
+        asu_symbols = block.get_symbols()
+    except Exception:  # malformed labels fall back to a regex
+        asu_symbols = [_cif_symbol_from_label(label) for label in labels]
+    if len(asu_symbols) != len(labels):
+        asu_symbols = [_cif_symbol_from_label(label) for label in labels]
+
+    # Anisotropic displacement parameters keyed by label (the loop may cover
+    # only some sites).  CIF may store Uij or Bij; B = 8*pi^2*U.
+    aniso_labels = _as_cif_list(block.get("_atom_site_aniso_label"))
+    aniso_columns = {
+        key: _as_cif_list(block.get(f"_atom_site_aniso_u_{key}")) for key in ("11", "22", "33", "12", "13", "23")
+    }
+    aniso_scale = 1.0
+    if aniso_labels and not all(aniso_columns.values()):
+        aniso_columns = {
+            key: _as_cif_list(block.get(f"_atom_site_aniso_b_{key}")) for key in ("11", "22", "33", "12", "13", "23")
+        }
+        aniso_scale = 1.0 / (8.0 * np.pi**2)
+    aniso: dict[str, np.ndarray] = {}
+    if aniso_labels and all(len(col) == len(aniso_labels) for col in aniso_columns.values()):
+        for idx, label in enumerate(aniso_labels):
+            values = {key: _cif_float(col[idx]) for key, col in aniso_columns.items()}
+            if any(value is None for value in values.values()):
+                continue
+            u11, u22, u33 = values["11"], values["22"], values["33"]
+            u12, u13, u23 = values["12"], values["13"], values["23"]
+            aniso[str(label)] = aniso_scale * np.array(
+                [[u11, u12, u13], [u12, u22, u23], [u13, u23, u33]],
+                dtype=float,
+            )
+
+    u_iso = _as_cif_list(block.get("_atom_site_u_iso_or_equiv"))
+    b_iso = _as_cif_list(block.get("_atom_site_b_iso_or_equiv"))
+
+    # Reciprocal-axis lengths and the direct metric tensor.  U_cif is the
+    # tensor in the reciprocal-length-normalised basis; Uiso enters as an
+    # isotropic Cartesian tensor.
+    reciprocal = np.linalg.inv(cell).T
+    recip_lengths = np.diag(np.linalg.norm(reciprocal, axis=1))
+    metric_inv = np.linalg.inv(cell @ cell.T)
+
+    site_tensors: list[np.ndarray | None] = []
+    for idx, label in enumerate(labels):
+        u_cif = aniso.get(str(label))
+        if u_cif is not None:
+            site_tensors.append(recip_lengths @ u_cif @ recip_lengths)
+            continue
+        value = _cif_float(u_iso[idx]) if idx < len(u_iso) else None
+        if value is None and idx < len(b_iso):
+            b_value = _cif_float(b_iso[idx])
+            if b_value is not None:
+                value = b_value / (8.0 * np.pi**2)
+        site_tensors.append(value * metric_inv if value is not None else None)
+
+    if not any(tensor is not None for tensor in site_tensors):
+        return None
+
+    # Expand the symmetric unit to the cell content and match each atom to
+    # its source site + symmetry operation.
+    expanded_frac = atoms.get_scaled_positions(wrap=True)
+    expanded_symbols = atoms.get_chemical_symbols()
+    if len(expanded_frac) != len(expanded_symbols):
+        return None
+
+    try:
+        operations = block.get_spacegroup(True).get_symop()
+    except Exception:  # no symmetry information: identity only
+        operations = [(np.eye(3), np.zeros(3))]
+    rotations = np.array([operation[0] for operation in operations], dtype=float)
+    translations = np.array([operation[1] for operation in operations], dtype=float)
+
+    adp: list[np.ndarray | None] = [None] * len(expanded_frac)
+    tolerance2 = 1e-8  # squared fractional distance (~1e-4 fractional)
+    for site_idx, symbol in enumerate(asu_symbols):
+        tensor = site_tensors[site_idx]
+        if tensor is None:
+            continue
+        element_mask = np.array([candidate == symbol for candidate in expanded_symbols], dtype=bool)
+        if not element_mask.any():
+            continue
+        element_indices = np.flatnonzero(element_mask)
+        images = np.mod(rotations @ asu_frac[site_idx] + translations, 1.0)  # (n_ops, 3)
+        delta = expanded_frac[element_mask, None, :] - images[None, :, :]
+        delta -= np.round(delta)
+        distances2 = np.einsum("ijk,ijk->ij", delta, delta)
+        nearest_op = np.argmin(distances2, axis=1)
+        nearest_distance2 = distances2[np.arange(len(nearest_op)), nearest_op]
+        for local_idx, (op_idx, dist2) in enumerate(zip(nearest_op, nearest_distance2, strict=True)):
+            if dist2 > tolerance2:
+                continue
+            atom_idx = int(element_indices[local_idx])
+            if adp[atom_idx] is not None:
+                continue
+            rotation = rotations[op_idx]
+            adp[atom_idx] = rotation @ tensor @ rotation.T
+
+    n_assigned = sum(tensor is not None for tensor in adp)
+    if not n_assigned:
+        return None
+    logger.debug("CIF ADPs: assigned thermal tensors to %d/%d atoms", n_assigned, len(adp))
+    return adp
+
 
 def parse_cif(path: str | Path) -> MolData:
     """Parse a CIF file via ase.  Requires ``pip install 'xyzrender[cif]'``.
 
     bonds is None (ase does not store bonds); pbc_cell holds the lattice matrix.
+    Anisotropic displacement parameters, when present, are returned in
+    ``MolData.adp`` and used by the thermal-ellipsoid renderer.
     """
     try:
-        import ase
-        import ase.io
+        from ase.io.cif import parse_cif as _ase_parse_cif
+        from ase.spacegroup.spacegroup import SpacegroupNotFoundError
     except ImportError:
         msg = "CIF parsing requires ase: pip install 'xyzrender[cif]'"
         raise ImportError(msg) from None
 
-    structure = ase.io.read(str(path), format="cif")
-    assert isinstance(structure, ase.Atoms), f"Expected Atoms from CIF, got {type(structure)}"
+    with open(path, encoding="latin-1") as handle:
+        blocks = [block for block in _ase_parse_cif(handle) if block.has_structure()]
+    if not blocks:
+        msg = f"No structure data found in CIF file: {path}"
+        raise ValueError(msg)
+    block = blocks[-1]
+
+    try:
+        structure = block.get_atoms()
+    except SpacegroupNotFoundError:
+        normalised = _normalise_cif_spacegroup(block)
+        if normalised is None:
+            raise
+        block = normalised
+        structure = block.get_atoms()
 
     symbols: list[str] = list(structure.get_chemical_symbols())
     positions = structure.get_positions()
@@ -1012,7 +1272,8 @@ def parse_cif(path: str | Path) -> MolData:
     atoms: list[tuple[str, tuple[float, float, float]]] = [
         (sym, (float(x), float(y), float(z))) for sym, (x, y, z) in zip(symbols, positions, strict=True)
     ]
-    return MolData(atoms=atoms, bonds=None, pbc_cell=cell, name=str(path))
+    adp = _cif_adp_tensors(block, structure)
+    return MolData(atoms=atoms, bonds=None, pbc_cell=cell, name=str(path), adp=adp)
 
 
 # ---------------------------------------------------------------------------

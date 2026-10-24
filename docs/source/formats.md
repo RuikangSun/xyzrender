@@ -107,6 +107,14 @@ Requires `pip install 'xyzrender[cif]'` (ase):
 xyzrender structure.cif
 ```
 
+CIF files that contain anisotropic displacement parameters (`_atom_site_aniso_U_*`, or `_atom_site_U_iso_or_equiv`) can be drawn as ORTEP-style thermal ellipsoids:
+
+```bash
+xyzrender structure.cif --thermal
+```
+
+The default ellipsoid encloses 50 % probability; use `--thermal-prob` or `--thermal-scale` to change the size. Thermal mode shows all hydrogen atoms by default; `--no-hy` hides C–H. See [Crystal Structures](examples/crystal.md#thermal-ellipsoids-ortep).
+
 ## SHELXL
 
 Requires `pip install 'xyzrender[shelxl]'` (shelxfile). Reads SHELXL small-molecule refinement files (`.res`, `.ins`). The full unit cell contents are expanded from the space-group symmetry, and — like CIF — the cell box, ghost atoms, and axis arrows are enabled automatically:

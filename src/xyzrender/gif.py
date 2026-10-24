@@ -408,7 +408,11 @@ def render_rotation_gif(
     # Pass lattice to _rotation_axis for crystallographic hkl axis strings
     _lattice = config.cell_data.lattice if config.cell_data is not None else None
     axis_vec, axis_sign = _rotation_axis(axis, lattice=_lattice)
-    frame = {"positions": original_pos_array.tolist(), "symbols": [graph.nodes[n]["symbol"] for n in nodes]}
+    frame = {
+        "positions": original_pos_array.tolist(),
+        "symbols": [graph.nodes[n]["symbol"] for n in nodes],
+        "adp": [graph.nodes[n].get("adp") for n in nodes],
+    }
     rot_cfg = _fixed_viewport([frame], config, rotation_axis=axis_vec)
 
     # Save original crystal state so we can recompute the rotated box each frame.
@@ -683,6 +687,21 @@ def _fixed_viewport(frames: list[dict], config: RenderConfig, rotation_axis: np.
         atom_pad = max_vdw * config.vdw_scale
     else:
         atom_pad = max_vdw * config.atom_scale * 0.075
+
+    # Thermal ellipsoids are physical sizes (Å) and can extend well past the
+    # display spheres, so reserve the largest principal semi-axis.
+    thermal_pad = 0.0
+    if config.thermal and config.cell_data is not None and frames[0].get("adp"):
+        from xyzrender.thermal import probability_scale
+
+        scale = probability_scale(config.thermal_prob) * config.thermal_scale
+        frac_to_cart = np.asarray(config.cell_data.lattice, dtype=float).T
+        for adp in frames[0]["adp"]:
+            if adp is None:
+                continue
+            tensor = frac_to_cart @ np.asarray(adp, dtype=float) @ frac_to_cart.T
+            thermal_pad = max(thermal_pad, scale * float(np.sqrt(np.clip(np.linalg.eigvalsh(tensor).max(), 0.0, None))))
+    atom_pad = max(atom_pad, thermal_pad)
 
     all_pos = np.vstack([np.array(f["positions"]) for f in frames])
 
